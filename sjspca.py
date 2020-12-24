@@ -1,18 +1,21 @@
 from warnings import warn
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.neighbors import NearestNeighbors
+from sklearn.utils.validation import check_is_fitted
 import numpy as np
 from numpy.linalg import norm
 from apgd import apg
 
 
 class SJSPCA(BaseEstimator, TransformerMixin):
-    def __init__(self, lambda1, lambda2, knn_sigma, tol=1e-5, max_iter=200):
+    def __init__(self, n_components, lambda1, lambda2, knn_sigma, residual_penalty=True, tol=1e-5, max_iter=200):
+        self.n_components = n_components
         self.l1 = lambda1
         self.l2 = lambda2
         self.tol = tol
         self.max_iter = max_iter
         self.knn_sigma = knn_sigma
+        self.residual_penalty = residual_penalty
     
     @staticmethod
     def _gen_laplace(X, n_neighbors=None, sigma=None):
@@ -48,6 +51,12 @@ class SJSPCA(BaseEstimator, TransformerMixin):
         
     def fit(self, X, y=None, A_init=None, L=None):
         n_features = X.shape[1]
+        if self.residual_penalty:  # apply L_{2, 1} norm on the residual space
+            C = np.hstack([np.zeros([n_features, self.n_components]),
+                           np.ones([n_features, n_features - self.n_components])])
+        else:
+            C = np.hstack([np.ones([n_features, self.n_components]),
+                           np.zeros([n_features, n_features - self.n_components])])
         if A_init is None:
             A_old = np.eye(n_features)
         else:
@@ -81,11 +90,18 @@ class SJSPCA(BaseEstimator, TransformerMixin):
         self.L_ = L.copy()
         self.A_ = A.copy()
         self.B_ = B.copy()
+        self.T_ = X @ self.B_
+        self.Lambda_ = np.var(self.T_, axis=0)  # the variance of each PC
         return A, B
     
     def transform(self, X, y=None):
+        check_is_fitted(self)  # to check if SJSPCA is fitted
         return X @ self.B_
-
+    
+    def compute_t2(self, X):
+        check_is_fitted(self)
+        return X @ B
+    
 
 if __name__ == "__main__":
     print("sjspca.py")

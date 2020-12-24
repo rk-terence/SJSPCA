@@ -1,5 +1,12 @@
 # SJSPCA
-Python implementation of structured joint sparse principal component analysis
+
+**Note: under developing stage**
+
+Python implementation of structured joint sparse principal component analysis. This implementation is based on the `Transformer` type in `scikit-learn`.
+
+SJSPCA can be used both for fault detection and fault isolation. For fault detection, the $T^2$ and $SPE$ statistic is calculated.
+
+For details, refer to the paper published on IEEE TII: *Structured Joint Sparse Principal Component Analysis for Fault Detection and Isolation*
 
 ## Improvement: Lipschitz constant added
 
