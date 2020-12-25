@@ -24,32 +24,46 @@ def mixed_norm(X, p, q):
         raise RuntimeError("Unsupported dimension of X.")
 
 
-def prox(constrain_type, constrain_lambda, x):
+def prox(constrain_type, constrain_lambda, x, C=None):
     def prox_l1(x, l):
         return np.sign(x) * np.maximum(np.abs(x) - l, 0)
-    def prox_l2_1(x, l):
+    def prox_l21(x, l):
         return np.maximum(1-l/norm(x, axis=1), 0).reshape(-1, 1) * x
+    def prox_l21c(x, l, C):
+        n_constrain = int(np.sum(C[0]))
+        C = C.astype(np.bool)
+        x_c = x[C].reshape(-1, n_constrain)
+        x_u = x[~C].reshape(-1, x.shape[1] - n_constrain)
+        x_c = prox_l21(x_c, l)
+        if C[0, 0]:
+            return np.hstack([x_c, x_u])
+        else:
+            return np.hstack([x_u, x_c])
 
     if constrain_type is None:
         return x
     elif constrain_type == "l1":  # L_1 norm
         return prox_l1(x, constrain_lambda)
     elif constrain_type == 'l21':  # L_{2,1} norm
-        return prox_l2_1(x, constrain_lambda)
+        return prox_l21(x, constrain_lambda)
+    elif constrain_type == 'l21c':  # L_{2,1} norm with indication matrix
+        return prox_l21c(x, constrain_lambda, C)
     else:
         raise RuntimeError("Unsupported constrain type")
 
 
-def g(constrain_type, x):
+def g(constrain_type, x, C=None):
     """
     calculate the constrain part of cost function according to the type.
     """
     if constrain_type is None:
         return 0
-    elif constrain_type == "l1": # L1 norm
+    elif constrain_type == "l1":  # L1 norm
         return np.sum(np.abs(x))
     elif constrain_type == 'l21':  # L_{2,1} norm
         return mixed_norm(x, 2, 1)
+    elif constrain_type == 'l21c':  # L_{2,1} norm with indication matrix C
+        return mixed_norm(x*C, 2, 1)
 
 
 def line_search(f, constrain_type, constrain_lambda, grad, x, step, beta=0.5):
@@ -62,13 +76,14 @@ def line_search(f, constrain_type, constrain_lambda, grad, x, step, beta=0.5):
     return step, z
 
 
-def apg(f, constrain_type, constrain_lambda, grad, x_init, 
+def apg(f, constrain_type, constrain_lambda, grad, x_init, constrain_C=None,
         lipschitz=None, step=1, loop_tol=1e-6, max_iter=500, verbose=False):
     """
     Accelerated Proximal Gradient Method.
     :param f: cost function of f(x) in min{ f(x) + g(x) }
     :param constrain_type: type of cost function of non-smooth part g(x) in min { f(x) + \lambda g(x) }
     :param constrain_lambda: the coefficient of constrain part.
+    :param constrain_C: the indication matrix for constrain, only used when constrain type is l21c
     :param grad: gradient function of f(x).
     :param x_init: the initial value of x
     :param lipschitz: lipschitz constant. if not given, line search method will be exploited.
@@ -87,7 +102,10 @@ def apg(f, constrain_type, constrain_lambda, grad, x_init,
             step, z = line_search(f, constrain_type, constrain_lambda, grad, y, step=step, beta=0.5)
         else:
             L_inv = 1 / lipschitz
-            z = prox(constrain_type, constrain_lambda / L_inv, y - L_inv * grad(y))
+            if constrain_C is not None:
+                z = prox(constrain_type, constrain_lambda / L_inv, y - L_inv * grad(y), C=constrain_C)
+            else:
+                z = prox(constrain_type, constrain_lambda / L_inv, y - L_inv * grad(y))
 
         x_old = x
         x = z  # update x by z
