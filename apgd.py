@@ -28,7 +28,9 @@ def prox(constrain_type, constrain_lambda, x, C=None):
     def prox_l1(x, l):
         return np.sign(x) * np.maximum(np.abs(x) - l, 0)
     def prox_l21(x, l):
-        return np.maximum(1-l/norm(x, axis=1), 0).reshape(-1, 1) * x
+        x_norm = norm(x, axis=1)
+        x_norm[x_norm == 0] = 1
+        return np.maximum(1-l/x_norm, 0).reshape(-1, 1) * x
     def prox_l21c(x, l, C):
         n_constrain = int(np.sum(C[0]))
         C = C.astype(np.bool)
@@ -77,7 +79,7 @@ def line_search(f, constrain_type, constrain_lambda, grad, x, step, beta=0.5):
 
 
 def apg(f, constrain_type, constrain_lambda, grad, x_init, constrain_C=None,
-        lipschitz=None, step=1, loop_tol=1e-6, max_iter=500, verbose=False):
+        lipschitz=None, step_init=1, loop_tol=1e-6, max_iter=500, verbose=False):
     """
     Accelerated Proximal Gradient Method.
     :param f: cost function of f(x) in min{ f(x) + g(x) }
@@ -95,25 +97,28 @@ def apg(f, constrain_type, constrain_lambda, grad, x_init, constrain_C=None,
     x = x_init
     x_old = np.zeros_like(x)   # x_old's initial value doesn't matter
     iter = 0
+    if lipschitz is not None:
+        step = 1 / lipschitz
     while True:
         omega = iter / (iter + 3)
         y = x + omega * (x - x_old)
         if lipschitz is None:
-            step, z = line_search(f, constrain_type, constrain_lambda, grad, y, step=step, beta=0.5)
+            step, z = line_search(f, constrain_type, constrain_lambda, grad, y, step=step_init, beta=0.5)
+        if constrain_C is not None:
+            z = prox(constrain_type, constrain_lambda * step, y - step * grad(y), C=constrain_C)
         else:
-            L_inv = 1 / lipschitz
-            if constrain_C is not None:
-                z = prox(constrain_type, constrain_lambda / L_inv, y - L_inv * grad(y), C=constrain_C)
-            else:
-                z = prox(constrain_type, constrain_lambda / L_inv, y - L_inv * grad(y))
+            z = prox(constrain_type, constrain_lambda * step, y - step * grad(y))
 
         x_old = x
         x = z  # update x by z
         if norm(x - x_old) <= loop_tol:
             break
         if iter >= max_iter:
-            warnings.warn("max_iter exceeded, if the Lipschitz constant is not given, "
+            if lipschitz is None:
+                warnings.warn("max_iter exceeded, if the Lipschitz constant is not given, "
                           "consider set it")
+            else:
+                warnings.warn("max_iter exceeded")
             break
         iter += 1
         if verbose:
@@ -139,8 +144,8 @@ if __name__ == "__main__":
     # x_init = np.array([50, 2, 3])
     # x_init = np.array([[1, 100], [20, -43]])
     x_init = np.array([-10, 20])
-    x = apg(f=test_f3, constrain_type=None, 
-            constrain_lambda=0.1, grad=test_grad3,
-            x_init=x_init, lipschitz=None, 
-            step=10, loop_tol=1e-6, max_iter=2000,
+    x = apg(f=test_f2, constrain_type=None, 
+            constrain_lambda=0.1, grad=test_grad2,
+            x_init=x_init, lipschitz=10, 
+            step_init=10, loop_tol=1e-6, max_iter=20000,
             verbose=True)

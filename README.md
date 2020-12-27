@@ -2,8 +2,9 @@
 
 **Note: under developing stage**
 > 
-> Now the offline modelling, fault detection and isolation have been completed, but testing failed.
-
+> Now the offline modelling, fault detection and isolation have been completed. But the isolation result result slightly differs from the paper.
+>
+> See simulation.ipynb for example
 
 Python implementation of structured joint sparse principal component analysis. This implementation is based on the `Transformer` type in `scikit-learn`.
 

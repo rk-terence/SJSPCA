@@ -5,18 +5,20 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.utils.validation import check_is_fitted
 import numpy as np
 from numpy.linalg import norm
-from apgd import apg
+from apgd import apg, mixed_norm
 
 
 class SJSPCA(BaseEstimator, TransformerMixin):
     def __init__(self, n_components, l1, l2, knn_sigma, knn_n_neighbors=None, 
                  partial_penalty=False, residual_penalty=True, 
-                 tol=1e-5, max_iter=200):
+                 verbose=False, tol=1e-5, max_iter=200, apgd_max_iter=500):
         self.n_components = n_components
         self.l1 = l1
         self.l2 = l2
         self.tol = tol
+        self.verbose = verbose
         self.max_iter = max_iter
+        self.apgd_max_iter = apgd_max_iter
         self.knn_sigma = knn_sigma
         self.knn_n_neighbors = knn_n_neighbors
         self.partial_penalty = partial_penalty
@@ -48,6 +50,13 @@ class SJSPCA(BaseEstimator, TransformerMixin):
     def _compute_lipschitz(self, X, L):
         return 2 * np.sqrt(X.shape[1]) * np.linalg.eig(X.T @ X + self.l2 * L)[0].max()
     
+    def _loss(self, X, A, B, L):
+        check_is_fitted(self)
+        if self.partial_penalty:
+            return self._f(X, A, B, L) + self.l1 * mixed_norm(B * self.C_, 2, 1)
+        else:
+            return self._f(X, A, B, L) + self.l1 * mixed_norm(B, 2, 1)
+    
     @staticmethod
     def _update_A(X, B):
         U, S, Vh = np.linalg.svd((X.T @ X) @ B)
@@ -64,6 +73,7 @@ class SJSPCA(BaseEstimator, TransformerMixin):
             else:
                 C = np.hstack([np.ones([n_features, self.n_components]),
                             np.zeros([n_features, n_features - self.n_components])])
+            self.C_ = C
         if A_init is None:
             A_old = np.eye(n_features)
         else:
@@ -80,12 +90,15 @@ class SJSPCA(BaseEstimator, TransformerMixin):
             grad = lambda B: self._grad(X, A_old, B, L)
             if self.partial_penalty:
                 B = apg(f=f, constrain_type='l21c', constrain_lambda=self.l1, constrain_C=C, grad=grad,
-                        x_init=B_old, lipschitz=Lc, loop_tol=inner_tol)
+                        x_init=B_old, lipschitz=Lc, loop_tol=inner_tol, max_iter=self.apgd_max_iter)
             else:
                 B = apg(f=f, constrain_type='l21', constrain_lambda=self.l1, grad=grad,
-                        x_init=B_old, lipschitz=Lc, loop_tol=inner_tol)
+                        x_init=B_old, lipschitz=Lc, loop_tol=inner_tol, max_iter=self.apgd_max_iter)
             # solve A with B fixed
             A = self._update_A(X, B)
+            
+            if self.verbose:
+                print('iter:', k, 'Loss:', self._loss(X, A, B, L))
             
             if norm(B - B_old)**2  < self.tol:
                 break
@@ -95,8 +108,8 @@ class SJSPCA(BaseEstimator, TransformerMixin):
             A_old = A
             
             if k >= self.max_iter:
-                warn("max_iter exceeded!\n",
-                     "norm(self.B - B_old):", norm(B - B_old))
+                warn("max_iter exceeded!\n")
+                print("norm(self.B - B_old):", norm(B - B_old))
                 break
         self.L_ = L.copy()
         self.A_ = A.copy()
@@ -129,11 +142,12 @@ class SJSPCA(BaseEstimator, TransformerMixin):
 def shrinkage(sjspca, X, l_init=1, step=2):
     l1 = l_init
     sjspca = copy.deepcopy(sjspca)
-    sjspca.set_params(partial_penalty=True, residual_penalty=True, n_components=2)
+    sjspca.set_params(partial_penalty=True, residual_penalty=True, n_components=2,
+                      verbose=False)
     while True:
         sjspca.set_params(l1=l1)
         Bd = sjspca.fit(X).Bd_
-        if Bd.all():
+        if not Bd.any():
             break
         l1 *= step
     Br = sjspca.Br_
@@ -149,7 +163,7 @@ def isolation(l1, Br, A, l2, Xf, L, verbose=True):
     Xstar = Xf - Xf @ Br @ Ar.T
     f = lambda dB : norm(Xstar - Xf @ dB @ Ad.T) + l2*(
         np.trace(Br.T @ L @ Br) + np.trace(dB.T @ L @ dB))
-    grad = lambda dB : 2 * Xf.T @ Xf @ dB + 2 * l2 @ L @ dB - 2 * Xf.T @ Xstar @ Ad
+    grad = lambda dB : 2 * Xf.T @ Xf @ dB + 2 * l2 * L @ dB - 2 * Xf.T @ Xstar @ Ad
     Lc = 2 * np.sqrt(n_d) * np.linalg.eig(Xf.T @ Xf + l2 * L)[0].max()
     dBinit = np.zeros_like(Ad)
     dB = apg(f=f, constrain_type='l21', constrain_lambda=l1, grad=grad, x_init=dBinit, lipschitz=Lc)
@@ -162,34 +176,4 @@ def isolation(l1, Br, A, l2, Xf, L, verbose=True):
     
 
 if __name__ == "__main__":
-    print("testing sjspca.py...\nusing the simulation example in SJSPCA paper\n")
-    print("#1 normal SJSPCA")
-    H = np.random.multivariate_normal(np.zeros(2), np.diag([0.98, 1]), size=500)
-    S = np.array([[1, 1, 1, 1, 0, 0, 0, 0, -0.6, -0.6],
-                [0, 0, 0, 0, 1, 1, 1, 1, 0.8, 0.8]])
-    Sh = S.T
-    e = np.random.multivariate_normal(np.zeros(10), np.diag([0.09, 0.09, 0.09, 0.09,
-                                                            0.16, 0.16, 0.16, 0.16,
-                                                            0.25, 0.25]), size=500)
-    X = H @ S + e
-    l1 = 220
-    l2 = 50
-    sigma = 0.002
-    n_neighbors = 10
-    sjspca = SJSPCA(n_components=2, l1=l1, l2=l2, 
-                    knn_sigma=sigma, knn_n_neighbors=n_neighbors, residual_penalty=False)
-    sjspca.fit(X)
-    print(sjspca.B_)
-    
-    print("#2 SJSPCA for fault detection and isolation")
-    Bias = np.zeros([500, 10])
-    Bias[150:, [1, 3]] = [1.2, 1.8]
-    Xf = X + Bias
-    
-    l1, Br, A = shrinkage(sjspca, X)
-    print('l1:', l1)
-    print('Br:')
-    print(Br)
-    print('A:')
-    print(A)
-    faulty_idx = isolation(l1, Br, A, l2, Xf=Xf, L=sjspca.L_, verbose=True)
+    print("sjspca.py")
